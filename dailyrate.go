@@ -143,7 +143,6 @@ func in90DaysRates() []operatingData {
 		// 		continue
 		// 	}
 		// }
-		//log.Println("Парсинг выполнен")
 
 		for _, valute := range daily.Valute {
 			allRrate = append(allRrate, operatingData{
@@ -153,7 +152,7 @@ func in90DaysRates() []operatingData {
 				Value:    float64(valute.Value),
 			})
 		}
-		// fmt.Println("Запись выполнена")
+
 	}
 	return allRrate
 }
