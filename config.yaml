@@ -1,0 +1,8 @@
+api:
+  timeout: 5s
+  base_Url: "http://www.cbr.ru/scripts/XML_daily_eng.asp?date_req="
+  user_Agen: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+dateF:
+  dateFormat: "02/01/2006"
+
+

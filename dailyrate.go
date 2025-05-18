@@ -7,47 +7,29 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/transform"
+	"gopkg.in/yaml.v3"
 )
 
 // юзаем алиас для автопарсинга  xml.Unmarshal
 type FloatWithComma float64
 
 type ValCurs struct {
-	// XMLNAME xml.Name `xml:"ValCurs"`
-	Date string `xml:"Date,attr"`
-	// Name   string   `xml:"name,attr"`
+	Date   string   `xml:"Date,attr"`
 	Valute []Valute `xml:"Valute"`
 }
 
-// type Valute struct {
-//  // XMLName   xml.Name `xml:"Valute"`
-//  // ID        string `xml:"ID,attr"`
-//  // NumCode   string `xml:"NumCode"`
-//  CharCode string `xml:"CharCode"`
-//  // Nominal   int    `xml:"Nominal"`
-//  Name  string `xml:"Name"`
-//  Value string `xml:"Value"`
-//  // VunitRate string `xml:"VunitRate"`
-// }
-
 type Valute struct {
-	// XMLName   xml.Name       `xml:"Valute"`
-	// ID        string         `xml:"ID,attr"`
-	// NumCode   string         `xml:"NumCode"`
-	CharCode string `xml:"CharCode"`
-	// Nominal   int            `xml:"Nominal"`
-	Name  string         `xml:"Name"`
-	Value FloatWithComma `xml:"Value"`
-	// VunitRate FloatWithComma `xml:"VunitRate"`
+	CharCode string         `xml:"CharCode"`
+	Name     string         `xml:"Name"`
+	Value    FloatWithComma `xml:"Value"`
 }
-
-// //делаем через метод UnmarshalXML интерфейса Unmarshaler
 
 func (f *FloatWithComma) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	// успел сделать автозамену при парсинге с апи
@@ -71,79 +53,151 @@ type operatingData struct {
 	Value    float64
 }
 
-func main() {
-	rates := in90DaysRates()
-	//fmt.Println(rates)
-	// businessLogic(rates)
-	min, max, avg := businessLogic(rates)
-
-	fmt.Printf("Минимальный курс на дату: %s\n", min.Date)
-	fmt.Printf("Для валюты %s, c кодом %s\n", min.Name, min.CharCode)
-	fmt.Printf("Составляет: %g\n", min.Value)
-
-	fmt.Printf("Максимальный курс на дату: %s\n", max.Date)
-	fmt.Printf("Для валюты %s, c кодом %s\n", max.Name, max.CharCode)
-	fmt.Printf("Составляет: %g\n", max.Value)
-
-	fmt.Printf("Cреднее значение курса рубля за весь период по всем валютам: %f\n", avg)
+type Config struct {
+	Api   ApiConfig  `yaml:"api"`
+	DateF DateConfig `yaml:"dateF"`
+}
+type ApiConfig struct {
+	Timeout   time.Duration `yaml:"timeout"`
+	BaseUrl   string        `yaml:"base_Url"`
+	UserAgent string        `yaml:"user_Agen"`
+}
+type DateConfig struct {
+	DateFormat string `yaml:"dateFormat"`
 }
 
-func in90DaysRates() []operatingData {
-	// формируем границы дат
+func LoagYamlConf(path string) (*Config, error) {
+	fileYamlDate, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("Read yaml-File error: %w", err)
+	}
+	var config Config
+	err = yaml.Unmarshal(fileYamlDate, &config)
+	if err != nil {
+		return nil, fmt.Errorf("Unmarshal yaml-File error: %w", err)
+	}
+	return &config, err
+}
+
+func main() {
+	config, err := LoagYamlConf("config.yaml")
+	if err != nil {
+		log.Fatal("Loag Yaml file error:", err)
+	}
+
+	httpClient := newHttpClient(config.Api.Timeout, config.Api.BaseUrl, config.Api.UserAgent)
+
+	formatDate := config.DateF.DateFormat
+
+	rates, err := getIn90DaysRates(formatDate, httpClient)
+	if err != nil {
+		log.Fatal("Error getting data for 90 days:", err)
+	}
+	dataReturn, err := getMinMaxAvg(rates)
+	if err != nil {
+		log.Fatal("Error getting data for 90 days:", err)
+	}
+	// min, max, avg := businessLogic(rates)
+
+	fmt.Printf("Минимальный курс на дату: %s\n", dataReturn.Min.Date)
+	fmt.Printf("Для валюты %s, c кодом %s\n", dataReturn.Min.Name, dataReturn.Min.CharCode)
+	fmt.Printf("Составляет: %g\n", dataReturn.Min.Value)
+	fmt.Printf("Максимальный курс на дату: %s\n", dataReturn.Max.Date)
+	fmt.Printf("Для валюты %s, c кодом %s\n", dataReturn.Max.Name, dataReturn.Max.CharCode)
+	fmt.Printf("Составляет: %g\n", dataReturn.Max.Value)
+	fmt.Printf("Cреднее значение курса рубля за весь период по всем валютам: %f\n", dataReturn.Avg)
+}
+
+// настраиваемый клиент, так-как на АПИ ЦБ висит защита
+type httpClient struct {
+	client    *http.Client
+	baseUrl   string
+	userAgent string
+}
+
+// функция для создания экземпляра клинта и прописания в него моих параметров
+func newHttpClient(timeout time.Duration, baseUrl, userAgent string) *httpClient {
+	return &httpClient{
+		client:    &http.Client{Timeout: timeout},
+		baseUrl:   baseUrl,
+		userAgent: userAgent,
+	}
+}
+
+func (c *httpClient) GetByDailyRate(path string) ([]byte, error) {
+	// метод для нттр клиента, который будет вызываться в рабочей функции
+	URL := c.baseUrl + path
+	// url := fmt.Sprintf("http://www.cbr.ru/scripts/XML_daily_eng.asp?date_req=%s", dateOfTheRequestedDay)
+	req, err := http.NewRequest("GET", URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("Error request: %w", err)
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Error HTTP request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf(" HTTP status error: %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Read error: %w", err)
+	}
+	return body, nil
+}
+
+func xmlDecoder(body []byte) (ValCurs, error) {
+	// функция декодер для соблюдения Single Responsibility Principle!
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		if charset == "windows-1251" {
+			return transform.NewReader(input, charmap.Windows1251.NewDecoder()), nil
+		}
+		return nil, fmt.Errorf("Unsupported encoding: %s", charset)
+	}
+
+	var daily ValCurs
+	if err := decoder.Decode(&daily); err != nil {
+		log.Fatal("XML parsing error:", err)
+	}
+	return daily, nil
+}
+
+func dateBorder() (time.Time, time.Time, error) {
 	end := time.Now()
 	start := end.AddDate(0, 0, -90)
+	return start, end, nil
+}
+
+// функция запроса данных с API ЦБ в течении 90 дней с момента даты запроса
+func getIn90DaysRates(formatDate string, client *httpClient) ([]operatingData, error) {
+
+	start, end, err := dateBorder()
+	if err != nil {
+		log.Fatal("Date border error:", err)
+	}
+
 	var allRrate []operatingData
 	// запускаем цикл с проверкой дат до текущей включительно
 	for d := start; d.Before(end) || d.Equal(end); d = d.AddDate(0, 0, 1) {
-		srtDate := d.Format("02/01/2006")
-		// запрос на апи на каждую дату
-		url := fmt.Sprintf("http://www.cbr.ru/scripts/XML_daily_eng.asp?date_req=%s", srtDate)
-		// полный ручной запрос, так-как на АПИ ЦБ висит защита
-		req, err := http.NewRequest("GET", url, nil)
+
+		dateOfTheRequestedDay := d.Format(formatDate)
+
+		body, err := client.GetByDailyRate(dateOfTheRequestedDay)
 		if err != nil {
-			log.Fatal("Ошибка запроса:", err)
+			log.Fatal("GET error:", err)
 			continue
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-		c := &http.Client{
-			Timeout: 5 * time.Second,
-		}
-		resp, err := c.Do(req)
-		if resp.StatusCode != 200 {
-			log.Fatal("Ошибка HTTP:", resp.Status)
-			continue
-		}
-		defer resp.Body.Close()
 
-		body, err := io.ReadAll(resp.Body)
+		daily, err := xmlDecoder(body)
 		if err != nil {
-			log.Fatal("Ошибка чтения:", err)
+			log.Fatal("XML parsing error:", err)
 			continue
 		}
-
-		//апи ЦБ возвращает данные в кодировке  Windows-1251, поэтому перекодируем в потоке
-
-		decoder := xml.NewDecoder(bytes.NewReader(body))
-		decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
-			if charset == "windows-1251" {
-				return transform.NewReader(input, charmap.Windows1251.NewDecoder()), nil
-			}
-			return nil, fmt.Errorf("неподдерживаемая кодировка: %s", charset)
-		}
-		var daily ValCurs
-		if err := decoder.Decode(&daily); err != nil {
-			log.Fatal("Ошибка парсинга XML:", err)
-			continue
-		}
-		// for _, valute := range daily.Value {
-		//  stringVal := strings.Replace(valute, ",", ".", 1)
-		//  valinFloat64 := strconv.ParseFloat(stringVal, 64)
-		//  if err != nil {
-		//      log.Fatal("Ошибка преобразования в float64:", err)
-		//      continue
-		//  }
-		// }
-		//log.Println("Парсинг выполнен")
 
 		for _, valute := range daily.Valute {
 			allRrate = append(allRrate, operatingData{
@@ -155,12 +209,18 @@ func in90DaysRates() []operatingData {
 		}
 		// fmt.Println("Запись выполнена")
 	}
-	return allRrate
+	return allRrate, nil
 }
 
-func businessLogic(rates []operatingData) (min, max operatingData, avg float64) {
+type dataReturn struct {
+	Min operatingData
+	Max operatingData
+	Avg float64
+}
+
+func getMinMaxAvg(rates []operatingData) (*dataReturn, error) {
 	if len(rates) == 0 {
-		log.Fatalf("Не корретные данные:")
+		log.Fatalf("Uncorrect data")
 	}
 	// фильтруем  Специальное права заимствования)
 
@@ -171,10 +231,13 @@ func businessLogic(rates []operatingData) (min, max operatingData, avg float64) 
 		}
 	}
 	if len(filteredRates) == 0 {
-		log.Fatal("Нет данных после фильтрации XDR")
+		log.Fatal("No data after filtering")
 	}
 
 	// набор данных с максимальной и минимальной ставкой ЦБ по валюте
+	// var dataReturn dataReturn
+	var max operatingData
+	var min operatingData
 	max = filteredRates[0]
 	min = filteredRates[0]
 	total := 0.0
@@ -188,8 +251,7 @@ func businessLogic(rates []operatingData) (min, max operatingData, avg float64) 
 		}
 		total += rate.Value
 	}
+	var avg float64
 	avg = total / float64(len(filteredRates))
-	// fmt.Printf("%s,%s,%g\n", max.Date, max.Name, max.Value)
-	// fmt.Printf("%s,%s,%g\n", min.Date, min.Name, min.Value)
-	return
+	return &dataReturn{Min: min, Max: max, Avg: avg}, nil
 }
