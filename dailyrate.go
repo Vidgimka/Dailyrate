@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,11 @@ import (
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/transform"
 	"gopkg.in/yaml.v3"
+)
+
+const (
+	configYaml = "config.yaml"
+	userAgent  = "User-Agent"
 )
 
 // юзаем алиас для автопарсинга  xml.Unmarshal
@@ -32,15 +38,15 @@ type Valute struct {
 }
 
 func (f *FloatWithComma) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	// успел сделать автозамену при парсинге с апи
+	// автозамена запятой при парсинге с апи
 	var s string
 	if err := d.DecodeElement(&s, &start); err != nil {
-		log.Fatal("Ошибка декодирования:", err)
+		log.Fatal("Decode:", err)
 	}
 	s = strings.Replace(s, ",", ".", 1)
 	value, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		log.Fatal("Ошибка преобразования:", err)
+		log.Fatal("Replace:", err)
 	}
 	*f = FloatWithComma(value)
 	return nil
@@ -55,12 +61,12 @@ type operatingData struct {
 
 type Config struct {
 	Api   ApiConfig  `yaml:"api"`
-	DateF DateConfig `yaml:"dateF"`
+	DateF DateConfig `yaml:"formats_date"`
 }
 type ApiConfig struct {
 	Timeout   time.Duration `yaml:"timeout"`
-	BaseUrl   string        `yaml:"base_Url"`
-	UserAgent string        `yaml:"user_Agen"`
+	BaseUrl   string        `yaml:"base_url"`
+	UserAgent string        `yaml:"user_agen"`
 }
 type DateConfig struct {
 	DateFormat string `yaml:"dateFormat"`
@@ -69,20 +75,20 @@ type DateConfig struct {
 func LoagYamlConf(path string) (*Config, error) {
 	fileYamlDate, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("Read yaml-File error: %w", err)
+		return nil, fmt.Errorf("read yaml-File: %w", err)
 	}
 	var config Config
 	err = yaml.Unmarshal(fileYamlDate, &config)
 	if err != nil {
-		return nil, fmt.Errorf("Unmarshal yaml-File error: %w", err)
+		return nil, fmt.Errorf("unmarshal yaml-File: %w", err)
 	}
 	return &config, err
 }
 
 func main() {
-	config, err := LoagYamlConf("config.yaml")
+	config, err := LoagYamlConf(configYaml)
 	if err != nil {
-		log.Fatal("Loag Yaml file error:", err)
+		log.Fatal("loag yaml file:", err)
 	}
 
 	httpClient := newHttpClient(config.Api.Timeout, config.Api.BaseUrl, config.Api.UserAgent)
@@ -126,26 +132,26 @@ func newHttpClient(timeout time.Duration, baseUrl, userAgent string) *httpClient
 
 func (c *httpClient) GetByDailyRate(path string) ([]byte, error) {
 	// метод для нттр клиента, который будет вызываться в рабочей функции
-	URL := c.baseUrl + path
+	url := c.baseUrl + path
 	// url := fmt.Sprintf("http://www.cbr.ru/scripts/XML_daily_eng.asp?date_req=%s", dateOfTheRequestedDay)
-	req, err := http.NewRequest("GET", URL, nil)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Error request: %w", err)
+		return nil, fmt.Errorf("error request: %w", err)
 	}
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set(userAgent, c.userAgent)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Error HTTP request: %w", err)
+		return nil, fmt.Errorf("error HTTP request: %w", err)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf(" HTTP status error: %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP status error: %d", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Read error: %w", err)
+		return nil, fmt.Errorf("read error: %w", err)
 	}
 	return body, nil
 }
@@ -157,7 +163,7 @@ func xmlDecoder(body []byte) (ValCurs, error) {
 		if charset == "windows-1251" {
 			return transform.NewReader(input, charmap.Windows1251.NewDecoder()), nil
 		}
-		return nil, fmt.Errorf("Unsupported encoding: %s", charset)
+		return nil, fmt.Errorf("unsupported encoding: %s", charset)
 	}
 
 	var daily ValCurs
@@ -178,7 +184,7 @@ func getIn90DaysRates(formatDate string, client *httpClient) ([]operatingData, e
 
 	start, end, err := dateBorder()
 	if err != nil {
-		log.Fatal("Date border error:", err)
+		return nil, fmt.Errorf("date border error:%w", err)
 	}
 
 	var allRrate []operatingData
@@ -195,8 +201,7 @@ func getIn90DaysRates(formatDate string, client *httpClient) ([]operatingData, e
 
 		daily, err := xmlDecoder(body)
 		if err != nil {
-			log.Fatal("XML parsing error:", err)
-			continue
+			return nil, fmt.Errorf("XML parsing error:%w", err)
 		}
 
 		for _, valute := range daily.Valute {
@@ -220,7 +225,7 @@ type dataReturn struct {
 
 func getMinMaxAvg(rates []operatingData) (*dataReturn, error) {
 	if len(rates) == 0 {
-		log.Fatalf("Uncorrect data")
+		return nil, errors.New("uncorrect data")
 	}
 	// фильтруем  Специальное права заимствования)
 
@@ -231,7 +236,7 @@ func getMinMaxAvg(rates []operatingData) (*dataReturn, error) {
 		}
 	}
 	if len(filteredRates) == 0 {
-		log.Fatal("No data after filtering")
+		return nil, errors.New("no data after filtering")
 	}
 
 	// набор данных с максимальной и минимальной ставкой ЦБ по валюте
