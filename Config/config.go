@@ -9,17 +9,19 @@ import (
 )
 
 type Config struct {
-	Api   ApiConfig  `yaml:"api"`
-	DateF DateConfig `yaml:"formats_date"`
+	Api ApiConfig `yaml:"api"`
+	// DateF DateConfig `yaml:"formats_date"`
 }
 type ApiConfig struct {
-	Timeout   time.Duration `yaml:"timeout"`
-	BaseUrl   string        `yaml:"base_url"`
-	UserAgent string        `yaml:"user_agen"`
+	Timeout    time.Duration `yaml:"timeout"`
+	BaseUrl    string        `yaml:"base_url"`
+	UserAgent  string        `yaml:"user_agen"`
+	DateFormat string        `yaml:"date_format"`
 }
-type DateConfig struct {
-	DateFormat string `yaml:"dateFormat"`
-}
+
+// type DateConfig struct {
+// 	DateFormat string `yaml:"date_format"`
+// }
 
 func NewConfig(path string) (*Config, error) {
 	fileYamlDate, err := os.ReadFile(path)

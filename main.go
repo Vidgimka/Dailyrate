@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
-	client "main/Client"
-	config "main/Config"
-	service "main/Service"
+	client "main/clientapi"
+	"main/config"
+	"main/service"
 )
 
 const (
@@ -19,10 +19,14 @@ func main() {
 		log.Fatal("loag yaml file:", err)
 	}
 
-	newService := &service.NewService{
-		FormatDate: newConfig.DateF.DateFormat,
-		Client:     client.NewHttpClient(newConfig.Api.Timeout, newConfig.Api.BaseUrl, newConfig.Api.UserAgent),
-	}
+	httpClient := client.NewHttpClient(
+		newConfig.Api.Timeout,
+		newConfig.Api.BaseUrl,
+		newConfig.Api.UserAgent,
+		newConfig.Api.DateFormat,
+	)
+
+	newService := service.NewService(httpClient)
 
 	rates, err := newService.GetIn90DaysRates()
 	if err != nil {
